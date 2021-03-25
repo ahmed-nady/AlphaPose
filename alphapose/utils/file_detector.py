@@ -9,9 +9,40 @@ import numpy as np
 import torch
 import torch.multiprocessing as mp
 
-from alphapose.utils.presets import SimpleTransform
+#from alphapose.utils.presets import SimpleTransform
+# from .bbox import (_box_to_center_scale, _center_scale_to_box,
+#                     _clip_aspect_ratio)
+from .transforms import (addDPG, affine_transform, flip_joints_3d,
+                          get_affine_transform, im_to_torch)
 
-
+def _box_to_center_scale(x, y, w, h, aspect_ratio=1.0, scale_mult=1.25):
+    """Convert box coordinates to center and scale.
+    adapted from https://github.com/Microsoft/human-pose-estimation.pytorch
+    """
+    pixel_std = 1
+    center = np.zeros((2), dtype=np.float32)
+    center[0] = x + w * 0.5
+    center[1] = y + h * 0.5
+    print("center",center[0],w * 0.5)
+    if w > aspect_ratio * h:
+        h = w / aspect_ratio
+    elif w < aspect_ratio * h:
+        w = h * aspect_ratio
+    scale = np.array(
+        [w * 1.0 / pixel_std, h * 1.0 / pixel_std], dtype=np.float32)
+    if center[0] != -1:
+        scale = scale * scale_mult
+    return center, scale
+def _center_scale_to_box(center, scale):
+    pixel_std = 1.0
+    w = scale[0] * pixel_std
+    h = scale[1] * pixel_std
+    xmin = center[0] - w * 0.5
+    ymin = center[1] - h * 0.5
+    xmax = xmin + w
+    ymax = ymin + h
+    bbox = [xmin, ymin, xmax, ymax]
+    return bbox
 class FileDetectionLoader():
     def __init__(self, input_source, cfg, opt, queueSize=128):
         self.cfg = cfg
@@ -22,15 +53,16 @@ class FileDetectionLoader():
         self._output_size = cfg.DATA_PRESET.HEATMAP_SIZE
 
         self._sigma = cfg.DATA_PRESET.SIGMA
+        input_size=self._input_size
+        # if cfg.DATA_PRESET.TYPE == 'simple':
+        #     self.transformation = SimpleTransform(
+        #         self, scale_factor=0,
+        #         input_size=self._input_size,
+        #         output_size=self._output_size,
+        #         rot=0, sigma=self._sigma,
+        #         train=False, add_dpg=False)
 
-        if cfg.DATA_PRESET.TYPE == 'simple':
-            self.transformation = SimpleTransform(
-                self, scale_factor=0,
-                input_size=self._input_size,
-                output_size=self._output_size,
-                rot=0, sigma=self._sigma,
-                train=False, add_dpg=False)
-
+        self._aspect_ratio = float(input_size[1]) / input_size[0]
         # initialize the det file list        
         boxes = None
         if isinstance(self.bbox_file,list):
@@ -107,12 +139,12 @@ class FileDetectionLoader():
             queue.get()
 
     def wait_and_put(self, queue, item):
-        if not self.stopped:
-            queue.put(item)
+        #if not self.stopped:
+        queue.put(item)
 
     def wait_and_get(self, queue):
-        if not self.stopped:
-            return queue.get()
+        #if not self.stopped:
+        return queue.get()
 
     def get_detection(self):
         
@@ -120,21 +152,45 @@ class FileDetectionLoader():
             boxes = torch.from_numpy(np.array(self.all_boxes[im_name_k]))
             scores = torch.from_numpy(np.array(self.all_scores[im_name_k]))
             ids = torch.from_numpy(np.array(self.all_ids[im_name_k]))
+            
             orig_img_k = cv2.cvtColor(cv2.imread(im_name_k), cv2.COLOR_BGR2RGB) #scipy.misc.imread(im_name_k, mode='RGB') is depreciated
 
 
             inps = torch.zeros(boxes.size(0), 3, *self._input_size)
             cropped_boxes = torch.zeros(boxes.size(0), 4)
+             
             for i, box in enumerate(boxes):
-                inps[i], cropped_box = self.transformation.test_transform(orig_img_k, box)
+                print("box",box.numpy(),orig_img_k.shape)
+                inps[i], cropped_box = self.test_transform(orig_img_k, box.numpy())
                 cropped_boxes[i] = torch.FloatTensor(cropped_box)
 
-            
+            print("cropped_boxes",cropped_boxes,scores)
             self.wait_and_put(self.pose_queue, (inps, orig_img_k, im_name_k, boxes, scores, ids, cropped_boxes))
         
         self.wait_and_put(self.pose_queue, (None, None, None, None, None, None, None))
         return
+    
+    def test_transform(self, src, bbox):
+        xmin, ymin, xmax, ymax = bbox
+        print("xmin, ymin, xmax, ymax",xmin, ymin, xmax, ymax)
+        center, scale = _box_to_center_scale(
+            xmin, ymin, xmax - xmin, ymax - ymin, self._aspect_ratio)
+        scale = scale * 1.0
+
+        input_size = self._input_size
+        inp_h, inp_w = input_size
+        print("inp_h",inp_h,src.shape)
+        trans = get_affine_transform(center, scale, 0, [inp_w, inp_h])
         
+        img = cv2.warpAffine(src, trans, (int(inp_w), int(inp_h)), flags=cv2.INTER_LINEAR)
+        bbox = _center_scale_to_box(center, scale)
+        
+        img = im_to_torch(img)
+        img[0].add_(-0.406)
+        img[1].add_(-0.457)
+        img[2].add_(-0.480)
+
+        return img, bbox
     def read(self):
         return self.wait_and_get(self.pose_queue)
 
