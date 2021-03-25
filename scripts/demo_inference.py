@@ -17,6 +17,7 @@ from trackers import track
 from alphapose.models import builder
 from alphapose.utils.config import update_config
 from alphapose.utils.detector import DetectionLoader
+from alphapose.utils.file_detector import FileDetectionLoader
 from alphapose.utils.transforms import flip, flip_heatmap
 from alphapose.utils.vis import getTime
 from alphapose.utils.webcam_detector import WebCamDetectionLoader
@@ -256,6 +257,7 @@ if __name__ == "__main__":
                 if args.pose_track:
                     boxes,scores,ids,hm,cropped_boxes = track(tracker,args,orig_img,inps,boxes,hm,cropped_boxes,im_name,scores)
                 hm = hm.cpu()
+                #print("orig_img",orig_img)
                 writer.save(boxes, scores, ids, hm, cropped_boxes, orig_img, im_name)
                 if args.profile:
                     ckpt_time, post_time = getTime(ckpt_time)
