@@ -153,7 +153,8 @@ class DataWriter():
             cv2.imshow("AlphaPose Demo", img)
             cv2.waitKey(30)
         if self.opt.save_img:
-            cv2.imwrite(os.path.join(self.opt.outputpath, 'vis', im_name), img)
+            print("im_name.split('/')[-1])",im_name.split('/')[-1])
+            cv2.imwrite(os.path.join(self.opt.outputpath, 'vis', im_name.split('/')[-1]), img)
         if self.save_video:
             stream.write(img)
 
